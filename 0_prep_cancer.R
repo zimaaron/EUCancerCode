@@ -49,9 +49,11 @@ code.dir <- paste0(getwd(), '/EUCancerCode/')
 ## load packages
 require(data.table)
 require(dplyr)
+require(TMB)
+require(Matrix)
 
 #######################
-## LOAD DATA OBJECTS ##
+## LOAD DATA 1OBJECTS ##
 #######################
 
 load(paste0(data.dir, 'AdjacencyMatrix.rdata')) ## Amat
@@ -103,11 +105,6 @@ m <- apply(amat, 1, sum)
 diag(k.u) <- m
 qr(k.u)$rank # 39
 
-# K and I are passed to the TMB in the data list
-K <- diag(apply(Amat, 1, sum)) - Amat
-I <- diag(Countries)
-
-
 # -- reorder the national data -- #
 natsub <- nat %>% arrange(id)
 
@@ -128,24 +125,24 @@ with(natsub, table(type))
 with(type1, table(as.character(cname)))
 
 # -- Type 2 Incidence: Registry Incidence data available -- #
-# reorder the columns of the registry data#
-regsub <- regsub %>% select(names(type1))
+# reorder the columns of the registry data to align with national data
+regsub <- regsub %>% dplyr::select( names(type1))
 
 # -- Combining Type 1 & 2 Incidence -- #
 type12 <- rbind(type1, regsub) %>% arrange(id)
 with(type12, table(type))
 
 
-# -- creating vectors to be used in Stan code -- #
+# -- creating vectors to be used in TMB code -- #
 Y <- type12$cases
 popY <- type12$pop.m
 
 # - used for indices - #
-Ya <- as.numeric(as.factor(type12$a))
-Yt <- type12$t
-Yc <- type12$c
+Ya <- as.numeric(as.factor(type12$a)) ## ages for Y (incidence) data
+Yt <- type12$t                        ## time index for Y (incidence) data
+Yc <- type12$c                        ## country index for Y (incidence) data
 
-# - Deaths to accompany cases - #
+# - Deaths to accompany cases (these are national) - #
 Z <- type12$deaths
 
 # - the number of Type 1 & 2 Countries - #
@@ -180,7 +177,6 @@ table(Y < Z)
 ## Extract Mortality Data for Type 2 (remainder not coverged by registry, nat-reg) and Type 3 (national) ##
 ###########################################################################################################
 
-
 # ---- Deaths for type 2 ----- #
 type2Mort <- natsub %>% filter(type==2) %>% arrange(id)
 
@@ -188,6 +184,7 @@ type2Mort <- natsub %>% filter(type==2) %>% arrange(id)
 dim(type2Mort)
 dim(regsub)
 
+## NOTE!
 # sometimes there is registry data in country/years for which there is complete
 # national data. Thus the difference in dimension here.  In those cases I limit
 # the registry data to only those for which there is no national incidence data
@@ -199,7 +196,6 @@ dim(regsub)
 regDat <- regsub %>% filter(id %in% type2Mort$id) %>% arrange(id)
 dim(regDat)
 dim(type2Mort)
-
 
 # -- isolate just the 'remainder' mortality, that which is not covered by registries -- #
 type2Deaths <- type2Mort$deaths - regDat$deaths
@@ -258,6 +254,10 @@ index_t <- index$year
 #################################################
 #################################################
 
+# K and I are passed to the TMB in the data list
+K <- Matrix(diag(apply(Amat, 1, sum)) - Amat, sparse = TRUE) ## TMB expects sparse mat
+I <- Matrix(diag(Countries), sparse = TRUE) ## TMB expects sparse mat
+
 data.list <- list(NY=NY, 
                   popY=popY,
                   Y=Y,
@@ -284,36 +284,34 @@ data.list <- list(NY=NY,
                   ## iarc_t=iarc_t,
                   ## iarc_a=iarc_a,
                   
-                  Nrates=Nrates,
+                  ## Nrates=Nrates,
                   index_c=index_c,
                   index_t=index_t,
+                  index_a=index_a
+                  )
 
-                  index_a=index_a)
+param.list <- list(
+  betI = (0.0),
+  betMI=(0.0),
 
-init.list <- list(
-  list(
-    betI = (0.0),betMI=(0.0),
-
-    bI = rep(0, Countries),
-    bMI = rep(0, Countries),
-    betaI = rep(0, Countries),
-    betaMI = rep(0, Countries),
-
-    gammaI = rep(-9.4, Ages),
-    gammaMI = rep(-0.8, Ages),
-    deltaI = matrix(rep(0.0, Ages*Countries),ncol=Ages),
-    deltaMI = matrix(rep(0.0, Ages*Countries),ncol=Ages),
-    tau_bi = 100,
-    tau_bmi = 100,
-    tau_betai = 100,
-    tau_betami = 100,
-    tau_delti = 100,
-    tau_deltmi = 100,
-
-    tau_gami = 100,
-    tau_gammi = 100,
-    lambdaI = 0.5,
-    lambdaMI = 0.5
-  )
-) 
-
+  bI = rep(0, Countries),
+  bMI = rep(0, Countries),
+  betaI = rep(0, Countries),
+  betaMI = rep(0, Countries),
+  
+  gammaI = rep(-9.4, Ages),
+  gammaMI = rep(-0.8, Ages),
+  deltaI = matrix(rep(0.0, Ages * Countries), ncol=Ages),
+  deltaMI = matrix(rep(0.0, Ages * Countries), ncol=Ages),
+  log_tau_bi = log(100),
+  log_tau_bmi = log(100),
+  log_tau_betai = log(100),
+  log_tau_betami = log(100),
+  log_tau_delti = log(100),
+  log_tau_deltmi = log(100),
+  
+  log_tau_gami = log(100),
+  log_tau_gammi = log(100),
+  lambdaI = 0.5,
+  lambdaMI = 0.5
+)

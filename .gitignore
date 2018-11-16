@@ -1,2 +1,9 @@
 ## ignore emacs
 *~
+
+## ignore R
+*Rhistory
+
+## ignore compiled TMB/C++
+*.o
+*.so
